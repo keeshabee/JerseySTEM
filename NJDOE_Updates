@@ -1,0 +1,430 @@
+-- ============================================================================
+-- NJDOE SCHOOL DATA COMPARISON VIEWS - TEMPLATE
+-- Fill in table names from Arlene, then execute
+-- ============================================================================
+
+-- ============================================================================
+-- VARIABLES TO GET FROM ARLENE:
+-- ============================================================================
+-- [NJDOE_UPLOAD_TABLE] = Table where she uploaded NJDOE data (e.g., Team_COME_OPS.SchoolUpload)
+-- [SALESFORCE_ACCOUNT] = Salesforce Account table (e.g., Salesforce.Account)
+-- [SALESFORCE_CONTACT] = Salesforce Contact table (e.g., Salesforce.Contact)
+-- [OUTPUT_SCHEMA] = Where to create output tables (e.g., Team_COME_OPS)
+
+
+-- ============================================================================
+-- VIEW 1: CompareUploadToSalesforce (Main Comparison View)
+-- ============================================================================
+
+CREATE OR REPLACE VIEW [OUTPUT_SCHEMA].CompareUploadToSalesforce AS
+SELECT 
+    -- NJDOE Data
+    n.CountyCode,
+    n.CountyName,
+    n.DistrictCode,
+    n.DistrictName,
+    n.SchoolCode,
+    n.SchoolName as NJDOE_SchoolName,
+    n.City as NJDOE_City,
+    n.Phone as NJDOE_Phone,
+    n.NCESCode as NJDOE_NCES,
+    
+    -- Salesforce Data
+    s.Id as Salesforce_Id,
+    s.Name as Salesforce_Name,
+    s.BillingCity as Salesforce_City,
+    s.Phone as Salesforce_Phone,
+    s.NCES_Code__c as Salesforce_NCES,
+    
+    -- Match Status
+    CASE 
+        WHEN s.Id IS NULL THEN 'ADD'
+        WHEN n.SchoolCode IS NULL THEN 'RETIRE'
+        WHEN s.Name != CONCAT(n.SchoolName, '-', 
+                             LPAD(n.CountyCode, 2, '0'), '-',
+                             LPAD(n.DistrictCode, 4, '0'), '-',
+                             LPAD(n.SchoolCode, 4, '0'))
+             OR COALESCE(s.BillingCity,'') != COALESCE(n.City,'')
+             OR COALESCE(s.Phone,'') != COALESCE(n.Phone,'')
+        THEN 'UPDATE'
+        ELSE 'NO CHANGE'
+    END as Status,
+    
+    -- Key fields with padding
+    LPAD(n.CountyCode, 2, '0') as County_Code__c,
+    LPAD(n.DistrictCode, 4, '0') as District_Code__c,
+    LPAD(n.SchoolCode, 4, '0') as School_Code__c
+
+FROM [NJDOE_UPLOAD_TABLE] n
+FULL OUTER JOIN [SALESFORCE_ACCOUNT] s 
+    ON s.County_Code__c = LPAD(n.CountyCode, 2, '0')
+    AND s.District_Code__c = LPAD(n.DistrictCode, 4, '0')
+    AND s.School_Code__c = LPAD(n.SchoolCode, 4, '0')
+    AND s.Type = 'School'
+    AND s.RecordTypeId = '0121U000000GBCQQA4';
+
+
+-- ============================================================================
+-- VIEW 2: Schools to ADD
+-- ============================================================================
+
+CREATE TABLE [OUTPUT_SCHEMA].Schools_ToAdd AS
+SELECT 
+    -- Salesforce required fields
+    '0121U000000GBCQQA4' as RecordTypeId,
+    'School' as Type,
+    
+    -- Key codes (with leading zeros)
+    LPAD(n.CountyCode, 2, '0') as County_Code__c,
+    CONCAT(UPPER(n.CountyName), '-', LPAD(n.CountyCode, 2, '0')) as County_Names__c,
+    LPAD(n.DistrictCode, 4, '0') as District_Code__c,
+    LPAD(n.SchoolCode, 4, '0') as School_Code__c,
+    
+    -- Constructed name (Salesforce format)
+    CONCAT(
+        n.SchoolName, '-',
+        LPAD(n.CountyCode, 2, '0'), '-',
+        LPAD(n.DistrictCode, 4, '0'), '-',
+        LPAD(n.SchoolCode, 4, '0')
+    ) as Name,
+    
+    -- ParentId (District lookup - ASK ARLENE HOW TO GET THIS)
+    d.Id as ParentId,
+    
+    -- Address fields
+    CONCAT(
+        COALESCE(n.Address1, ''),
+        CASE WHEN n.Address2 IS NOT NULL AND n.Address2 != '' 
+             THEN CONCAT('\n', n.Address2) 
+             ELSE '' 
+        END
+    ) as BillingStreet,
+    n.City as BillingCity,
+    n.State as BillingState,
+    n.Zip as BillingPostalCode,
+    
+    -- Mailing address
+    CONCAT(
+        COALESCE(n.MailingAddress1, ''),
+        CASE WHEN n.MailingAddress2 IS NOT NULL AND n.MailingAddress2 != '' 
+             THEN CONCAT('\n', n.MailingAddress2) 
+             ELSE '' 
+        END
+    ) as ShippingStreet,
+    n.MailingCity as ShippingCity,
+    n.MailingState as ShippingState,
+    n.MailingZip as ShippingPostalCode,
+    
+    -- Contact
+    n.Phone,
+    
+    -- Grades (adjust column names if different)
+    n.Grade1 as Grade_1__c,
+    n.Grade2 as Grade_2__c,
+    n.Grade3 as Grade_3__c,
+    n.Grade4 as Grade_4__c,
+    n.Grade5 as Grade_5__c,
+    n.Grade6 as Grade_6__c,
+    n.Grade7 as Grade_7__c,
+    n.Grade8 as Grade_8__c,
+    n.Grade9 as Grade_9__c,
+    n.Grade10 as Grade_10__c,
+    n.Grade11 as Grade_11__c,
+    n.Grade12 as Grade_12__c,
+    
+    -- NCES Code
+    n.NCESCode as NCES_Code__c,
+    
+    -- SchoolShortCode (ASK ARLENE FOR GENERATION LOGIC)
+    NULL as SchoolShortCode__c,
+    
+    -- Metadata
+    CURRENT_TIMESTAMP as CreatedDate_Temp
+
+FROM [NJDOE_UPLOAD_TABLE] n
+LEFT JOIN [SALESFORCE_ACCOUNT] d 
+    ON d.District_Code__c = LPAD(n.DistrictCode, 4, '0')
+    AND d.Type = 'District'
+LEFT JOIN [SALESFORCE_ACCOUNT] s 
+    ON s.County_Code__c = LPAD(n.CountyCode, 2, '0')
+    AND s.District_Code__c = LPAD(n.DistrictCode, 4, '0')
+    AND s.School_Code__c = LPAD(n.SchoolCode, 4, '0')
+    AND s.Type = 'School'
+WHERE s.Id IS NULL;
+
+
+-- ============================================================================
+-- VIEW 3: Schools to RETIRE (Mark Inactive)
+-- ============================================================================
+
+CREATE TABLE [OUTPUT_SCHEMA].Schools_ToRetire AS
+SELECT 
+    s.Id as Salesforce_Id,
+    s.Name,
+    s.County_Code__c,
+    s.District_Code__c,
+    s.School_Code__c,
+    s.BillingCity,
+    'RETIRE' as Action,
+    'School no longer in NJDOE data' as Reason,
+    
+    -- ASK ARLENE: What field marks schools as inactive?
+    -- Common options: IsActive__c, Status__c, etc.
+    'FALSE' as IsActive__c_NewValue,
+    
+    CURRENT_TIMESTAMP as ProcessedDate
+
+FROM [SALESFORCE_ACCOUNT] s
+LEFT JOIN [NJDOE_UPLOAD_TABLE] n 
+    ON LPAD(n.CountyCode, 2, '0') = s.County_Code__c
+    AND LPAD(n.DistrictCode, 4, '0') = s.District_Code__c
+    AND LPAD(n.SchoolCode, 4, '0') = s.School_Code__c
+WHERE n.SchoolCode IS NULL
+    AND s.Type = 'School'
+    AND s.RecordTypeId = '0121U000000GBCQQA4';
+
+
+-- ============================================================================
+-- VIEW 4: Schools with DATA CHANGES
+-- ============================================================================
+
+CREATE TABLE [OUTPUT_SCHEMA].Schools_ToUpdate AS
+SELECT 
+    s.Id as Salesforce_Id,
+    
+    -- Key identifiers
+    s.County_Code__c,
+    s.District_Code__c,
+    s.School_Code__c,
+    
+    -- Old vs New values
+    s.Name as Old_Name,
+    CONCAT(
+        n.SchoolName, '-',
+        LPAD(n.CountyCode, 2, '0'), '-',
+        LPAD(n.DistrictCode, 4, '0'), '-',
+        LPAD(n.SchoolCode, 4, '0')
+    ) as New_Name,
+    
+    s.BillingStreet as Old_Address,
+    CONCAT(
+        COALESCE(n.Address1, ''),
+        CASE WHEN n.Address2 IS NOT NULL THEN CONCAT('\n', n.Address2) ELSE '' END
+    ) as New_Address,
+    
+    s.BillingCity as Old_City,
+    n.City as New_City,
+    
+    s.BillingPostalCode as Old_Zip,
+    n.Zip as New_Zip,
+    
+    s.Phone as Old_Phone,
+    n.Phone as New_Phone,
+    
+    s.NCES_Code__c as Old_NCES,
+    n.NCESCode as New_NCES,
+    
+    -- Change flags
+    CASE WHEN s.Name != CONCAT(n.SchoolName, '-', 
+                                LPAD(n.CountyCode, 2, '0'), '-',
+                                LPAD(n.DistrictCode, 4, '0'), '-',
+                                LPAD(n.SchoolCode, 4, '0'))
+         THEN 'Y' ELSE 'N' END as Name_Changed,
+    
+    CASE WHEN COALESCE(s.BillingStreet,'') != COALESCE(CONCAT(n.Address1, 
+                       CASE WHEN n.Address2 IS NOT NULL THEN CONCAT('\n', n.Address2) ELSE '' END),'')
+         THEN 'Y' ELSE 'N' END as Address_Changed,
+    
+    CASE WHEN COALESCE(s.BillingCity,'') != COALESCE(n.City,'')
+         THEN 'Y' ELSE 'N' END as City_Changed,
+    
+    CASE WHEN COALESCE(s.BillingPostalCode,'') != COALESCE(n.Zip,'')
+         THEN 'Y' ELSE 'N' END as Zip_Changed,
+    
+    CASE WHEN COALESCE(s.Phone,'') != COALESCE(n.Phone,'')
+         THEN 'Y' ELSE 'N' END as Phone_Changed,
+    
+    CASE WHEN COALESCE(s.NCES_Code__c,'') != COALESCE(n.NCESCode,'')
+         THEN 'Y' ELSE 'N' END as NCES_Changed,
+    
+    CURRENT_TIMESTAMP as ProcessedDate
+
+FROM [SALESFORCE_ACCOUNT] s
+INNER JOIN [NJDOE_UPLOAD_TABLE] n 
+    ON LPAD(n.CountyCode, 2, '0') = s.County_Code__c
+    AND LPAD(n.DistrictCode, 4, '0') = s.District_Code__c
+    AND LPAD(n.SchoolCode, 4, '0') = s.School_Code__c
+WHERE s.Type = 'School'
+    AND s.RecordTypeId = '0121U000000GBCQQA4'
+    AND (
+        s.Name != CONCAT(n.SchoolName, '-', 
+                        LPAD(n.CountyCode, 2, '0'), '-',
+                        LPAD(n.DistrictCode, 4, '0'), '-',
+                        LPAD(n.SchoolCode, 4, '0'))
+        OR COALESCE(s.BillingCity,'') != COALESCE(n.City,'')
+        OR COALESCE(s.BillingPostalCode,'') != COALESCE(n.Zip,'')
+        OR COALESCE(s.Phone,'') != COALESCE(n.Phone,'')
+        OR COALESCE(s.NCES_Code__c,'') != COALESCE(n.NCESCode,'')
+    );
+
+
+-- ============================================================================
+-- VIEW 5: Contacts (Principals) - ADD/UPDATE/RETIRE
+-- ============================================================================
+
+-- Note: This combines all three actions. Ask Arlene if she wants separate tables.
+
+CREATE TABLE [OUTPUT_SCHEMA].Contacts_Changes AS
+SELECT 
+    -- Salesforce Contact ID (null for new contacts)
+    c.Id as Salesforce_Id,
+    
+    -- Contact information from NJDOE
+    n.PrincFirstName as FirstName,
+    n.PrincLastName as LastName,
+    n.PrincEmail as Email,
+    n.Phone,
+    COALESCE(n.PrincTitle, 'Principal') as Title,
+    
+    -- Link to school (AccountId lookup)
+    s.Id as AccountId,
+    n.SchoolName as School_Name,
+    LPAD(n.CountyCode, 2, '0') as School_County_Code__c,
+    LPAD(n.DistrictCode, 4, '0') as School_District_Code__c,
+    LPAD(n.SchoolCode, 4, '0') as School_Code__c,
+    
+    -- Action needed
+    CASE 
+        WHEN c.Id IS NULL THEN 'ADD'
+        WHEN n.PrincLastName IS NULL THEN 'RETIRE'
+        WHEN COALESCE(c.Email,'') != COALESCE(n.PrincEmail,'')
+             OR COALESCE(c.Phone,'') != COALESCE(n.Phone,'')
+        THEN 'UPDATE'
+        ELSE 'NO CHANGE'
+    END as Action,
+    
+    -- Change flags (for updates)
+    CASE WHEN COALESCE(c.Email,'') != COALESCE(n.PrincEmail,'')
+         THEN 'Y' ELSE 'N' END as Email_Changed,
+    CASE WHEN COALESCE(c.Phone,'') != COALESCE(n.Phone,'')
+         THEN 'Y' ELSE 'N' END as Phone_Changed,
+    
+    CURRENT_TIMESTAMP as ProcessedDate
+
+FROM [NJDOE_UPLOAD_TABLE] n
+LEFT JOIN [SALESFORCE_ACCOUNT] s 
+    ON LPAD(n.CountyCode, 2, '0') = s.County_Code__c
+    AND LPAD(n.DistrictCode, 4, '0') = s.District_Code__c
+    AND LPAD(n.SchoolCode, 4, '0') = s.School_Code__c
+    AND s.Type = 'School'
+LEFT JOIN [SALESFORCE_CONTACT] c 
+    ON c.AccountId = s.Id
+    AND c.Title LIKE '%Principal%'
+    AND c.LastName = n.PrincLastName
+    AND c.FirstName = n.PrincFirstName
+
+UNION ALL
+
+-- Principals in Salesforce but not in NJDOE (to retire)
+SELECT 
+    c.Id as Salesforce_Id,
+    c.FirstName,
+    c.LastName,
+    c.Email,
+    c.Phone,
+    c.Title,
+    c.AccountId,
+    a.Name as School_Name,
+    a.County_Code__c as School_County_Code__c,
+    a.District_Code__c as School_District_Code__c,
+    a.School_Code__c,
+    'RETIRE' as Action,
+    'N' as Email_Changed,
+    'N' as Phone_Changed,
+    CURRENT_TIMESTAMP as ProcessedDate
+FROM [SALESFORCE_CONTACT] c
+INNER JOIN [SALESFORCE_ACCOUNT] a ON a.Id = c.AccountId
+LEFT JOIN [NJDOE_UPLOAD_TABLE] n 
+    ON LPAD(n.CountyCode, 2, '0') = a.County_Code__c
+    AND LPAD(n.DistrictCode, 4, '0') = a.District_Code__c
+    AND LPAD(n.SchoolCode, 4, '0') = a.School_Code__c
+    AND c.LastName = n.PrincLastName
+    AND c.FirstName = n.PrincFirstName
+WHERE c.Title LIKE '%Principal%'
+    AND n.SchoolCode IS NULL;
+
+
+-- ============================================================================
+-- VALIDATION QUERIES
+-- ============================================================================
+
+-- Run these after creating views/tables to verify
+
+-- Check counts
+SELECT 
+    'Main Comparison' as View_Name,
+    COUNT(*) as Total_Records,
+    SUM(CASE WHEN Status = 'ADD' THEN 1 ELSE 0 END) as To_Add,
+    SUM(CASE WHEN Status = 'RETIRE' THEN 1 ELSE 0 END) as To_Retire,
+    SUM(CASE WHEN Status = 'UPDATE' THEN 1 ELSE 0 END) as To_Update,
+    SUM(CASE WHEN Status = 'NO CHANGE' THEN 1 ELSE 0 END) as No_Change
+FROM [OUTPUT_SCHEMA].CompareUploadToSalesforce
+
+UNION ALL
+
+SELECT 
+    'Schools to Add',
+    COUNT(*),
+    COUNT(*), 0, 0, 0
+FROM [OUTPUT_SCHEMA].Schools_ToAdd
+
+UNION ALL
+
+SELECT 
+    'Schools to Retire',
+    COUNT(*),
+    0, COUNT(*), 0, 0
+FROM [OUTPUT_SCHEMA].Schools_ToRetire
+
+UNION ALL
+
+SELECT 
+    'Schools to Update',
+    COUNT(*),
+    0, 0, COUNT(*), 0
+FROM [OUTPUT_SCHEMA].Schools_ToUpdate
+
+UNION ALL
+
+SELECT 
+    'Contact Changes',
+    COUNT(*),
+    SUM(CASE WHEN Action = 'ADD' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN Action = 'RETIRE' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN Action = 'UPDATE' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN Action = 'NO CHANGE' THEN 1 ELSE 0 END)
+FROM [OUTPUT_SCHEMA].Contacts_Changes;
+
+
+-- Check for schools without parent districts (should be zero)
+SELECT 
+    'Schools without parent district' as Issue,
+    COUNT(*) as Count
+FROM [OUTPUT_SCHEMA].Schools_ToAdd
+WHERE ParentId IS NULL;
+
+
+-- ============================================================================
+-- QUESTIONS FOR ARLENE (Fill in the blanks above):
+-- ============================================================================
+-- 
+-- 1. What is [NJDOE_UPLOAD_TABLE]? (e.g., Team_COME_OPS.SchoolUpload)
+-- 2. What is [SALESFORCE_ACCOUNT]? (e.g., Salesforce.Account)
+-- 3. What is [SALESFORCE_CONTACT]? (e.g., Salesforce.Contact)
+-- 4. What is [OUTPUT_SCHEMA]? (e.g., Team_COME_OPS)
+-- 5. How do I generate SchoolShortCode__c?
+-- 6. What field marks schools as inactive? (for retire process)
+-- 7. Do NJDOE column names match what I have? (CountyCode, DistrictCode, etc.)
+-- 8. Are there other required fields for the upload files?
+-- 
+-- ============================================================================
